@@ -1,1 +1,313 @@
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:table_calendar/table_calendar.dart';
 
+class LawyerSchedulePage extends StatefulWidget {
+  const LawyerSchedulePage({Key? key}) : super(key: key);
+
+  @override
+  State<LawyerSchedulePage> createState() => _LawyerSchedulePageState();
+}
+
+class _LawyerSchedulePageState extends State<LawyerSchedulePage> {
+  DateTime _focusedDay = DateTime.now();
+  DateTime? _selectedDay;
+  TimeOfDay? _selectedTime;
+  bool _isHoliday = false;
+  Set<DateTime> _holidayDates = <DateTime>{};
+
+
+
+  bool _isPastDate(DateTime day) {
+    final now = DateTime.now();
+    final todayOnly = DateTime(now.year, now.month, now.day);
+    final selectedOnly = DateTime(day.year, day.month, day.day);
+    return selectedOnly.isBefore(todayOnly);
+  }
+
+  Future<void> saveAppointment() async {
+    final currentUser = FirebaseAuth.instance.currentUser;
+    if (currentUser == null || _selectedDay == null || _selectedTime == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('الرجاء اختيار يوم ووقت أولاً')),
+      );
+      return;
+    }
+
+    final dateStr = _selectedDay!.toIso8601String().split('T')[0];
+    final timeStr = _selectedTime!.format(context);
+
+    final existingSlot = await FirebaseFirestore.instance
+        .collection('Appointments')
+        .where('lawyerId', isEqualTo: currentUser.uid)
+        .where('date', isEqualTo: dateStr)
+        .where('time', isEqualTo: timeStr)
+        .limit(1)
+        .get();
+
+    if (existingSlot.docs.isNotEmpty) {
+      final doc = existingSlot.docs.first;
+      final data = doc.data();
+
+      if (data['userId'] != null) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('هذا الوقت محجوز بالفعل ولا يمكن تعديله')),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('يوجد موعد بهذا الوقت مسبقًا')),
+      );
+      return;
+    }
+
+    final appointmentData = {
+      'lawyerId': currentUser.uid,
+      'userId': null,
+      'date': dateStr,
+      'time': timeStr,
+      'isAvailable': !_isHoliday,
+      'isHoliday': _isHoliday,
+      'createdAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    };
+
+    await FirebaseFirestore.instance.collection('Appointments').add(appointmentData);
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+          content: Text('تم حفظ الموعد بنجاح'),
+        duration: Duration(seconds: 2),
+      ),
+    );
+
+    setState(() {
+      _selectedTime = null;
+      _isHoliday = false;
+    });
+  }
+
+  Future<void> _pickTime() async {
+    final TimeOfDay? picked = await showTimePicker(
+      context: context,
+      initialTime: TimeOfDay.now(),
+    );
+    if (picked != null) {
+      setState(() {
+        _selectedTime = picked;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Color(0xFFF4E3DB),
+      appBar: AppBar(
+        backgroundColor: Color(0xFF052532),
+        title: Text('إدارة المواعيد', style: TextStyle(color: Colors.white)),
+        centerTitle: true,
+      ),
+      body: Column(
+        children: [
+          TableCalendar(
+            firstDay: DateTime.utc(2022, 1, 1),
+            lastDay: DateTime.utc(2030, 12, 31),
+            focusedDay: _focusedDay,
+            selectedDayPredicate: (day) => isSameDay(_selectedDay, day),
+            holidayPredicate: (day) {
+              return _holidayDates.any((holiday) =>
+              holiday.year == day.year &&
+                  holiday.month == day.month &&
+                  holiday.day == day.day);
+            },
+
+            onDaySelected: (selectedDay, focusedDay) {
+              if (_isPastDate(selectedDay)) return;
+
+              setState(() {
+                _selectedDay = selectedDay;
+                _focusedDay = focusedDay;
+              });
+            },
+
+
+
+
+
+            calendarStyle: CalendarStyle(
+              selectedDecoration: BoxDecoration(
+                color: Color(0xFF9B7D73),
+                shape: BoxShape.circle,
+              ),
+              todayDecoration: BoxDecoration(
+                color: Color(0xFF052532),
+                shape: BoxShape.circle,
+              ),
+              disabledTextStyle: TextStyle(color: Colors.grey),
+              holidayTextStyle: TextStyle(color: Colors.grey),
+              holidayDecoration: BoxDecoration(
+                color: Colors.grey.shade400,
+                shape: BoxShape.circle,
+              ),
+            ),
+
+            enabledDayPredicate: (day) {
+              // امنع فقط الأيام الماضية
+              return !_isPastDate(day);
+            },
+            headerStyle: HeaderStyle(
+              titleCentered: true,
+              formatButtonVisible: false,
+              titleTextStyle: TextStyle(
+                color: Color(0xFF052532),
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+          SizedBox(height: 16),
+          if (_selectedDay != null)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 20.0),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: _pickTime,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF9B7D73),
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(40),
+                            ),
+                          ),
+                          child: Text(
+                            'اختيار الوقت',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ),
+                      SizedBox(width: 16),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () async {
+                            final currentUser = FirebaseAuth.instance.currentUser;
+                            if (_selectedDay == null || currentUser == null) return;
+
+                            final dateStr = _selectedDay!.toIso8601String().split('T')[0];
+
+                            final snapshot = await FirebaseFirestore.instance
+                                .collection('Appointments')
+                                .where('lawyerId', isEqualTo: currentUser.uid)
+                                .where('date', isEqualTo: dateStr)
+                                .limit(1)
+                                .get();
+
+                            if (snapshot.docs.isNotEmpty &&
+                                snapshot.docs.first['userId'] != null &&
+                                snapshot.docs.first['userId'] != "") {
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(content: Text('لا يمكن تحديد/إلغاء اليوم كإجازة لأنه محجوز من قبل مستخدم')),
+                              );
+                              return;
+                            }
+
+                            setState(() {
+                              if (_holidayDates.contains(_selectedDay)) {
+                                // إذا اليوم إجازة → نشيله
+                                _holidayDates.remove(_selectedDay!);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text('تم إلغاء الإجازة'),
+                                    duration: Duration(seconds: 2),
+                                  ),
+                                );
+                              } else {
+                                // إذا اليوم عادي → نخليه إجازة
+                                _holidayDates.add(_selectedDay!);
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                      content: Text('تم تحديد اليوم كإجازة'),
+                                      duration: Duration(seconds: 2),
+                                ),
+                                );
+                              }
+                            });
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Color(0xFF9B7D73), // ثابت بني
+                            padding: EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(
+                              borderRadius: BorderRadius.circular(40),
+                            ),
+                          ),
+                          child: Text(
+                            _selectedDay != null && _holidayDates.contains(_selectedDay)
+                                ? 'إلغاء الإجازة'
+                                : 'إجازة',
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+
+                        ),
+                      ),
+
+
+                    ],
+                  ),
+
+                  const SizedBox(height: 70),
+                  Center(
+                    child: Text(
+                      _selectedTime != null
+                          ? _selectedTime!.format(context)
+                          : 'لا تواجد مواعيد',
+                      style: TextStyle(
+                        color: Color(0xFF052532),
+                        fontSize: 14,
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(height: 130),
+                  Center(
+                    child: ElevatedButton(
+                      onPressed: saveAppointment,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: Color(0xFF9B7D73),
+                        padding: EdgeInsets.symmetric(horizontal: 30, vertical: 12),
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(40),
+                        ),
+                      ),
+                      child: Text(
+                        'حفظ الموعد',
+                        style: TextStyle(
+                          color: Colors.white,
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+
+                ],
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
